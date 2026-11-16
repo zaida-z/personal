@@ -47,6 +47,11 @@ Nothing below can be created by the software; each item is something you own or 
 5. **Your postal address** as `SENDER_POSTAL_ADDRESS`. CAN-SPAM requires a physical address in commercial email.
 6. **Leads you are allowed to contact**, as CSV or XLSX with a header row.
 
+**Connecting many mailboxes at once:** on *Email accounts*, click **Import from CSV**. Any CSV/XLSX with
+Email, SMTP Password, SMTP Host and SMTP Port columns works, including Instantly's export (a blank template is
+linked in the dialog). Warm-up columns are ignored. Each account is saved encrypted and gets the normal
+connection checks; connecting sends no email. Delete the file from your computer afterwards.
+
 ### Optional, and what you lose without each
 
 | Item | Setting | Without it |

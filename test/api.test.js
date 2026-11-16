@@ -1,6 +1,6 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { freshDb, fakeDns, lead, sandboxAccount, campaign } from './_helpers.js';
+import { freshDb, fakeDns, lead, sandboxAccount, campaign, GOOD_ZONE } from './_helpers.js';
 import { createApp } from '../src/server.js';
 import { get, run, all } from '../src/db.js';
 import { transport } from '../src/engine/transport.js';
@@ -103,4 +103,43 @@ test('errors do not leak internals; unknown routes 404', async () => {
   assert.equal((await call('GET', '/api/nope')).status, 404);
   const r = await call('POST', '/api/leads', Buffer.from('{bad json'), { 'content-type': 'application/json' });
   assert.equal(r.status, 400); assert.doesNotMatch(r.text, /node_modules|at /);
+});
+
+test('accounts: CSV import (Instantly layout) connects valid rows, skips bad ones, and never returns or stores passwords in the clear', async () => {
+  const { testers } = await import('../src/accounts/service.js');
+  testers.smtp = async () => {}; testers.imap = async () => {};
+  fakeDns({ ...GOOD_ZONE('mail-a.test'), ...GOOD_ZONE('mail-b.test') });
+  const csv = [
+    'Email,First Name,Last Name,IMAP Username,IMAP Password,IMAP Host,IMAP Port,SMTP Username,SMTP Password,SMTP Host,SMTP Port,Daily Limit,Warmup Enabled,Warmup Limit,Warmup Increment',
+    'one@mail-a.test,One,A,one@mail-a.test,S3cret!one,imap.host.test,993,one@mail-a.test,S3cret!one,smtp.host.test,465,5,true,20–25,3',
+    'two@mail-b.test,Two,B,two@mail-b.test,S3cret!two,imap.host.test,993,two@mail-b.test,S3cret!two,smtp.host.test,587,,true,20–25,3',
+    'ONE@mail-a.test,Dup,A,x,S3cret!dup,imap.host.test,993,x,S3cret!dup,smtp.host.test,465,5,true,,3',
+    'not-an-email,Bad,B,x,pw,imap.host.test,993,x,pw,smtp.host.test,465,5,,,',
+    'nopw@mail-a.test,No,Pw,x,,imap.host.test,993,x,,smtp.host.test,465,5,,,',
+  ].join('\n');
+  const body = Buffer.from(csv);
+  const pv = await call('POST', '/api/accounts/import/preview?filename=a.csv', body);
+  assert.equal(pv.status, 200); assert.equal(pv.json.rows, 5);
+  assert.equal(pv.json.accounts.filter((a) => !a.error).length, 2);
+  assert.doesNotMatch(pv.text, /S3cret/, 'preview must not echo passwords');
+  assert.equal(get('SELECT COUNT(*) n FROM accounts WHERE email LIKE \'%@mail-%\'').n, 0, 'preview must not save anything');
+
+  const r = await call('POST', '/api/accounts/import?filename=a.csv', body);
+  assert.equal(r.status, 201); assert.equal(r.json.created, 2); assert.equal(r.json.failed, 3);
+  assert.doesNotMatch(r.text, /S3cret/, 'result must not echo passwords');
+  assert.match(r.json.results.find((x) => x.line === 4).error, /Duplicate/);
+  assert.match(r.json.results.find((x) => x.line === 5).error, /Invalid email/);
+  assert.match(r.json.results.find((x) => x.line === 6).error, /No password/);
+  assert.equal(r.json.results.find((x) => x.line === 2).status, 'healthy');
+  const a1 = get("SELECT * FROM accounts WHERE email = 'one@mail-a.test'"), a2 = get("SELECT * FROM accounts WHERE email = 'two@mail-b.test'");
+  assert.equal(a1.smtp_secure, 1); assert.equal(a1.smtp_port, 465); assert.equal(a1.daily_limit, 5); assert.equal(a1.from_name, 'One A'); assert.equal(a1.warmup_enabled, 0);
+  assert.equal(a2.smtp_secure, 0); assert.equal(a2.daily_limit, 30, 'missing daily limit falls back to the default');
+  assert.doesNotMatch(String(a1.secret_enc), /S3cret/, 'password is encrypted at rest');
+  assert.ok(!JSON.stringify((await call('GET', '/api/accounts')).json).includes('S3cret'));
+  // Importing the same file again connects nothing new.
+  const again = await call('POST', '/api/accounts/import?filename=a.csv', body);
+  assert.equal(again.json.created, 0); assert.match(again.json.results.find((x) => x.line === 2).error, /already connected/);
+  assert.equal((await call('POST', '/api/accounts/import?filename=a.csv', Buffer.alloc(0))).status, 400);
+  assert.equal((await call('GET', '/api/accounts/import/template.csv')).status, 200);
+  cookie = ''; assert.equal((await call('POST', '/api/accounts/import?filename=a.csv', body)).status, 401);
 });

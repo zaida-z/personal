@@ -220,7 +220,7 @@ function importWizard(done) {
 async function accountsPage(main) {
   const list = await api('GET', '/accounts');
   const reload = () => route();
-  set(main, pageHead('Email accounts', 'An account is shown as healthy only when every required check passes. Failing or unverified accounts cannot send.', h('button', { class: 'primary', onclick: () => accountModal(null, reload) }, 'Connect account')),
+  set(main, pageHead('Email accounts', 'An account is shown as healthy only when every required check passes. Failing or unverified accounts cannot send.', h('button', { onclick: () => accountImportModal(reload) }, 'Import from CSV'), h('button', { class: 'primary', onclick: () => accountModal(null, reload) }, 'Connect account')),
     list.length ? list.map((a) => h('div', { class: 'card' },
       h('div', { class: 'row' }, h('h2', { style: 'margin:0' }, a.email), badge(a.paused ? 'paused' : a.status), h('span', { class: 'muted small' }, `${state.system.providers[a.provider].label} · ${a.auth === 'oauth' ? 'OAuth2' : a.auth === 'password' ? 'password / app password' : 'no credentials'}`),
         h('span', { class: 'right row' }, h('button', { class: 'sm', onclick: act(async () => { await api('POST', `/accounts/${a.id}/check`); toast('Checks re-run'); reload(); }) }, 'Re-check'),
@@ -254,6 +254,33 @@ function accountModal(a, done) {
     if (!body.password) delete body.password; if (!body.username) delete body.username;
     const res = await api(a ? 'PATCH' : 'POST', a ? `/accounts/${a.id}` : '/accounts', body); toast(`${res.email}: ${res.status}`); done();
   } }] });
+}
+
+function accountImportModal(done) {
+  const q = (file) => `?filename=${encodeURIComponent(file.name)}`;
+  let box;
+  const m = modal('Import email accounts from CSV / XLSX', h('div', null,
+    h('p', { class: 'muted' }, 'Upload a file with one mailbox per row. Instantly\'s "CSV file" export works as-is. Needed columns: Email, SMTP Password, SMTP Host, SMTP Port (IMAP Host/Port, SMTP Username and Daily Limit are optional). Warm-up columns are ignored.'),
+    h('p', { class: 'small' }, h('a', { href: '/api/accounts/import/template.csv' }, 'Download a blank template')),
+    h('div', { class: 'banner info small' }, 'Passwords are read on the server, encrypted at rest and never shown again. Delete the file from your computer afterwards. Connecting an account sends no email.'),
+    h('input', { type: 'file', accept: '.csv,.xlsx,text/csv', onchange: act(async (e) => {
+      const file = e.target.files[0]; if (!file) return;
+      const pv = await api('POST', `/accounts/import/preview${q(file)}`, file);
+      const ok = pv.accounts.filter((a) => !a.error);
+      set(box, h('div', null,
+        h('p', null, h('b', null, `${ok.length} of ${pv.rows} account(s) ready to connect.`), pv.accounts.length - ok.length ? ` ${pv.accounts.length - ok.length} will be skipped.` : ''),
+        h('table', { class: 'tbl' }, h('thead', null, h('tr', null, ['Line', 'Email', 'SMTP', 'IMAP', 'Daily limit', 'Result'].map((t) => h('th', null, t)))),
+          h('tbody', null, pv.accounts.map((a) => h('tr', null, h('td', null, a.line), h('td', null, a.email ?? '—'), h('td', null, a.smtp ?? ''), h('td', null, a.imap ?? ''), h('td', null, a.daily_limit ?? ''), h('td', null, a.error ? badge('failed', a.error) : 'Ready'))))),
+        h('div', { class: 'actions', style: 'margin-top:10px' }, h('button', { class: 'primary', disabled: !ok.length, onclick: act(async () => {
+          set(box, h('p', null, `Connecting ${ok.length} account(s) and running connection checks. This can take a minute...`));
+          const r = await api('POST', `/accounts/import${q(file)}`, file);
+          set(box, h('div', null, h('p', null, h('b', null, `${r.created} connected, ${r.failed} skipped or failed.`), ' A connection that fails its check is saved but cannot send until fixed; use Edit or Re-check on the accounts page.'),
+            h('table', { class: 'tbl' }, h('tbody', null, r.results.map((x) => h('tr', null, h('td', null, x.email ?? `line ${x.line}`), h('td', null, x.error ? badge('failed', x.error) : badge(x.status))))))));
+          done();
+        }) }, `Connect ${ok.length} account(s)`))));
+    }) }),
+    box = h('div', { style: 'margin-top:12px' })), { wide: true });
+  return m;
 }
 
 // ---------------- domains ----------------

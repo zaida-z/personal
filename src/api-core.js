@@ -8,6 +8,7 @@ import { parseFile, guessMapping, stageImport, commitImport, discardImport, list
 import { ensureDomain, runDomainCheck, domainHistory } from './domains/health.js';
 import { PROVIDERS, OAUTH, oauthConfigured, checkAccount, publicAccount, domainOf } from './accounts/service.js';
 import { toCsv } from './analytics/metrics.js';
+import { rowsToAccounts, recognisedColumns, MAX_ACCOUNT_ROWS, TEMPLATE_CSV } from './accounts/import.js';
 import { suppress, stopSequences } from './inbox/sync.js';
 import { aiEnabled } from './ai/assistant.js';
 
@@ -238,8 +239,8 @@ function accountFields(b, existing = {}) {
   if (provider !== 'sandbox' && (!f.smtp_host || !f.smtp_port)) throw bad(422, 'SMTP host and port are required');
   return f;
 }
-core.post('/accounts', async (req, res) => {
-  const b = req.body || {};
+/** Shared by single connect and CSV import. Throws bad(...) on validation problems; never echoes the password. */
+function insertAccount(b, userEmail) {
   const s = checkSyntax(b.email);
   if (!s.ok) throw bad(422, `Invalid email: ${s.reason}`);
   if (get('SELECT 1 x FROM accounts WHERE email = ?', s.email)) throw bad(409, 'This account is already connected');
@@ -248,9 +249,47 @@ core.post('/accounts', async (req, res) => {
   const id = Number(run(`INSERT INTO accounts (email, from_name, provider, smtp_host, smtp_port, smtp_secure, imap_host, imap_port, username, secret_enc, daily_limit, warmup_enabled, warmup_start, warmup_increment, warmup_started_at, signature, created_at)
     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, s.email, f.from_name, f.provider, f.smtp_host, f.smtp_port, f.smtp_secure, f.imap_host, f.imap_port, f.username, encrypt(b.password),
     f.daily_limit, f.warmup_enabled, f.warmup_start, f.warmup_increment, f.warmup_enabled ? now() : null, f.signature, now()).lastInsertRowid);
-  audit('account.create', { email: s.email, provider: f.provider }, req.user.email);
+  audit('account.create', { email: s.email, provider: f.provider }, userEmail);
+  return id;
+}
+core.post('/accounts', async (req, res) => {
+  const id = insertAccount(req.body || {}, req.user.email);
   await checkAccount(id);
   res.status(201).json(publicAccount(get('SELECT * FROM accounts WHERE id = ?', id)));
+});
+// Bulk connect from CSV/XLSX. Per-row outcomes; one bad row never blocks the others. Passwords are never returned or logged.
+core.get('/accounts/import/template.csv', (req, res) => { res.type('text/csv').set('Content-Disposition', 'attachment; filename="email-accounts-template.csv"').send(TEMPLATE_CSV); });
+async function readAccountRows(req) {
+  if (!Buffer.isBuffer(req.body) || !req.body.length) throw bad(400, 'Upload a CSV or XLSX file');
+  let rows;
+  try { rows = await parseFile(req.body, String(req.query.filename || '')); } catch (err) { throw bad(422, `Could not read the file: ${err.message}`); }
+  if (!rows.length) throw bad(422, 'The file has no data rows');
+  if (rows.length > MAX_ACCOUNT_ROWS) throw bad(422, `Import at most ${MAX_ACCOUNT_ROWS} accounts per file`);
+  return rows;
+}
+core.post('/accounts/import/preview', upload, async (req, res) => {
+  const rows = await readAccountRows(req);
+  const items = rowsToAccounts(rows);
+  res.json({ rows: rows.length, recognised_columns: recognisedColumns(Object.keys(rows[0])),
+    accounts: items.map((x) => ({ line: x.line, email: x.email, error: x.error ?? (get('SELECT 1 x FROM accounts WHERE email = ?', x.email) ? 'Already connected' : null),
+      smtp: x.body ? `${x.body.smtp_host}:${x.body.smtp_port}` : null, imap: x.body ? `${x.body.imap_host}:${x.body.imap_port}` : null, daily_limit: x.body?.daily_limit ?? null })) });
+});
+core.post('/accounts/import', upload, async (req, res) => {
+  const items = rowsToAccounts(await readAccountRows(req));
+  const results = items.map((x) => ({ line: x.line, email: x.email, id: null, status: null, error: x.error ?? null }));
+  const created = [];
+  items.forEach((x, i) => {
+    if (x.error) return;
+    try { results[i].id = insertAccount(x.body, req.user.email); created.push(i); } catch (err) { results[i].error = err.status ? err.message : 'Could not save this account'; }
+  });
+  // Connection checks run a few at a time so a big file does not open dozens of SMTP/IMAP sessions at once.
+  for (let k = 0; k < created.length; k += 4) {
+    await Promise.all(created.slice(k, k + 4).map(async (i) => {
+      try { results[i].status = (await checkAccount(results[i].id)).status; } catch { results[i].status = 'unverified'; results[i].error = 'Saved, but the connection check could not run'; }
+    }));
+  }
+  audit('account.import', { rows: items.length, created: created.length }, req.user.email);
+  res.status(201).json({ total: items.length, created: created.length, failed: items.length - created.length, results });
 });
 core.patch('/accounts/:id', async (req, res) => {
   const id = int(req.params.id), b = req.body || {};
