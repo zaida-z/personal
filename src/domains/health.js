@@ -38,7 +38,8 @@ export async function checkSpf(domain) {
   if (!spf.length) return check('spf', 'SPF', 'fail', true, 'No SPF record published.', `Add a TXT record on ${domain}: "v=spf1 include:<your mail provider> ~all" (e.g. include:_spf.google.com for Google Workspace).`);
   if (spf.length > 1) return check('spf', 'SPF', 'fail', true, `${spf.length} SPF records found; receivers treat multiple records as a permanent error.`, 'Merge all mechanisms into a single v=spf1 TXT record.', { record: spf.join(' | ') });
   const rec = spf[0];
-  const allTerm = rec.match(/([+\-~?]?)all\b/i);
+  // Match "all" only as a whole term: a substring match would read include:spf.firewall.com as "+all".
+  const allTerm = rec.trim().split(/\s+/).slice(1).map((t) => t.match(/^([+\-~?]?)all$/i)).find(Boolean);
   if (allTerm && (allTerm[1] === '+' || allTerm[1] === '')) return check('spf', 'SPF', 'fail', true, 'SPF ends in "+all", which authorises every server on the internet.', 'Change the final mechanism to "~all" or "-all".', { record: rec });
   const lookups = await countSpfLookups(rec);
   if (lookups > 10) return check('spf', 'SPF', 'fail', true, `SPF needs ${lookups} DNS lookups; the limit is 10, so receivers return permerror.`, 'Remove unused include: mechanisms or flatten the record.', { record: rec, lookups });

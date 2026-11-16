@@ -18,6 +18,13 @@ test('SPF: missing, multiple, +all, too many lookups, weak, good', async () => {
   assert.equal(good.status, 'pass'); assert.equal(good.lookups, 4); // i1 + i2 + a + mx
   assert.ok((await spf()).fix, 'failing checks carry a recommended fix');
 });
+test('SPF: "all" inside an include hostname is not mistaken for the all mechanism (found on first live DNS run)', async () => {
+  fakeDns({ 'd.test/TXT': ['v=spf1 include:spf.firewall.test include:mail-all.test -all'], 'spf.firewall.test/TXT': ['v=spf1 ip4:192.0.2.0/24 -all'], 'mail-all.test/TXT': ['v=spf1 ip4:198.51.100.0/24 -all'] });
+  assert.equal((await checkSpf('d.test')).status, 'pass');
+  fakeDns({ 'd.test/TXT': ['v=spf1 include:spf.firewall.test'], 'spf.firewall.test/TXT': ['v=spf1 ip4:192.0.2.0/24 -all'] });
+  assert.equal((await checkSpf('d.test')).status, 'warn');
+});
+
 test('DMARC: missing fails, p=none warns, enforced passes', async () => {
   fakeDns({}); assert.equal((await checkDmarc('d.test')).status, 'fail');
   fakeDns({ '_dmarc.d.test/TXT': ['v=DMARC1; p=none'] }); assert.equal((await checkDmarc('d.test')).status, 'warn');
