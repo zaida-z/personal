@@ -53,8 +53,9 @@ function delta(cur, prev, { lowerIsBetter = false, unit = '' } = {}) {
   return h('span', null, `${d > 0 ? '▲' : '▼'} ${Math.abs(d)}${unit} vs previous 30 days`, h('span', { class: 'muted' }, good ? ' (better)' : ' (worse)'));
 }
 const tile = (label, value, sub, tag) => h('div', { class: 'tile' }, h('div', { class: 'label' }, label, tag), h('div', { class: 'value' }, value), h('div', { class: 'sub' }, sub));
-const EST = () => h('span', { class: 'badge warn', title: 'Derived, not observed' }, 'estimated');
-const MEAS = () => h('span', { class: 'badge', title: 'Counted from events this system observed' }, 'measured');
+const EST = () => h('span', { class: 'src est', title: 'Derived, not observed' }, 'estimated');
+const MEAS = () => h('span', { class: 'src', title: 'Counted from events this system observed' }, 'measured');
+const stat = (label, value, sub, tag) => h('div', null, h('div', { class: 'label' }, label, tag), h('div', { class: 'value' }, value), h('div', { class: 'sub' }, sub));
 
 async function dashboardPage(main) {
   const d = state.dash ?? await api('GET', `/dashboard?mode=${state.mode}`);
@@ -69,17 +70,18 @@ async function dashboardPage(main) {
     simBanner(),
     d.alerts.map((a) => h('div', { class: 'banner ' + (a.severity === 'critical' ? 'bad' : 'warn') }, h('div', { class: 'row' }, h('span', { class: 'grow' }, h('b', null, a.severity === 'critical' ? '✕ Critical: ' : '! Warning: '), a.message, h('span', { class: 'small' }, ` · ${fmt.ago(a.created_at)}`)),
       h('button', { class: 'sm', onclick: act(async () => { await api('POST', `/alerts/${a.id}/resolve`); route(); }) }, 'Dismiss')))),
-    todo.length ? h('div', { class: 'card' }, h('h2', null, 'Getting started'), todo.map(([, label, href]) => h('div', null, '○ ', h('a', { href }, label))),
-      state.mode === 'real' && d.has_sandbox_data && !d.has_real_data ? h('p', { class: 'small muted', style: 'margin-top:8px' }, 'There is sandbox activity but no real sends yet. Switch to "Sandbox" above to see the simulated data.') : null) : null,
-    h('div', { class: 'grid g4', style: 'margin-bottom:14px' },
+    todo.length ? h('div', { class: 'card' }, h('h2', null, 'Getting started'), h('div', { class: 'steps' }, todo.map(([, label, href], i) => h('a', { href }, h('i', null, String(i + 1)), label))),
+      state.mode === 'real' && d.has_sandbox_data && !d.has_real_data ? h('p', { class: 'small muted', style: 'margin:12px 0 0' }, 'There is sandbox activity but no real sends yet. Switch to "Sandbox" above to see the simulated data.') : null) : null,
+    h('div', { class: 'grid hero' },
       tile('Emails sent', fmt.n(m.sent), delta(m.sent, pm.sent), MEAS()),
-      tile('Delivered', fmt.n(d.last_30.estimated.delivered), 'sent minus bounces; inbox placement is not observable', EST()),
       tile('Reply rate', fmt.pct(r.reply_rate), h('span', null, `${fmt.n(m.replies)} replies · `, delta(r.reply_rate, pr.reply_rate, { unit: ' pts' })), MEAS()),
       tile('Positive replies', fmt.n(m.positive_replies), `${fmt.pct(r.positive_reply_rate)} of delivered · ${fmt.n(m.negative_replies)} negative`, MEAS()),
-      tile('Click rate', fmt.pct(r.click_rate), `${fmt.n(m.unique_clickers)} people clicked · ${fmt.n(m.suspected_bot_clicks)} scanner clicks excluded`, MEAS()),
-      tile('Bounce rate', fmt.pct(r.bounce_rate), `${fmt.n(m.hard_bounces)} hard · ${fmt.n(m.soft_bounces)} soft`, MEAS()),
-      tile('Unsubscribes', fmt.n(m.unsubscribes), `${fmt.pct(r.unsubscribe_rate)} of delivered · ${fmt.n(m.spam_complaints)} complaints logged`, MEAS()),
       tile('Meetings booked', fmt.n(m.meetings_booked), `${fmt.pct(r.lead_to_meeting_conversion)} of contacted leads · marked by you in the inbox`, MEAS())),
+    h('div', { class: 'card' }, h('div', { class: 'stat-strip' },
+      stat('Delivered', fmt.n(d.last_30.estimated.delivered), 'sent minus bounces; inbox placement is not observable', EST()),
+      stat('Click rate', fmt.pct(r.click_rate), `${fmt.n(m.unique_clickers)} people clicked · ${fmt.n(m.suspected_bot_clicks)} scanner clicks excluded`, MEAS()),
+      stat('Bounce rate', fmt.pct(r.bounce_rate), `${fmt.n(m.hard_bounces)} hard · ${fmt.n(m.soft_bounces)} soft`, MEAS()),
+      stat('Unsubscribes', fmt.n(m.unsubscribes), `${fmt.pct(r.unsubscribe_rate)} of delivered · ${fmt.n(m.spam_complaints)} complaints logged`, MEAS()))),
     empty ? h('div', { class: 'card empty' }, state.mode === 'sandbox' ? 'No sandbox activity yet. Create a campaign with a sandbox account to rehearse the full workflow.' : 'No real emails have been sent in the last 30 days, so there is nothing to chart yet.')
       : h('div', { class: 'grid g2' },
         h('div', { class: 'card' }, h('h2', null, 'Emails sent per day'), barChart(d.series, 'sent', 'Sent')),
