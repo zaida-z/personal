@@ -71,3 +71,12 @@ test('thresholds: unverified and stale results never pass', () => {
   assert.equal(meetsThreshold({ ...base, verification_status: 'invalid' }, 'dns_verified').ok, false);
   assert.equal(meetsThreshold({ ...base, verification_checked_at: new Date(Date.now() - 100 * 864e5).toISOString() }, 'valid').ok, false);
 });
+test('broken DNS that answers "not found" for everything is detected and never produces "invalid"', async () => {
+  const { setResolver, resolve } = await import('../src/lib/dns.js');
+  setResolver(async () => [], { guard: true }); // resolver returns nothing, even for the canary domains
+  await assert.rejects(() => resolve('corp.test', 'MX'), /DNS is not working/);
+  const r = await verifyEmail('jane@corp.test', { probe: null });
+  assert.equal(r.status, 'unknown'); assert.equal(r.checks.dns, 'error');
+  setResolver(async (name) => (name === 'gmail.com' ? [{ priority: 5, exchange: 'mx.google.test' }] : []), { guard: true }); // DNS works; domain really has no records
+  assert.equal((await verifyEmail('jane@corp.test', { probe: null })).status, 'invalid');
+});

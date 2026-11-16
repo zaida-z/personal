@@ -81,7 +81,7 @@ export function validateRecord(rec, required = ['email']) {
 export async function stageImport({ rows, mapping, filename, source, tags = [], required = ['email'], checkDomains = true }) {
   const records = [];
   const seen = new Map();
-  const counts = { total: rows.length, importable: 0, rejected: 0, duplicate_in_file: 0, duplicate_existing: 0, suppressed: 0, invalid_domain: 0, flagged: 0, domain_unchecked: 0 };
+  const counts = { total: rows.length, importable: 0, rejected: 0, invalid_or_incomplete: 0, duplicate_in_file: 0, duplicate_existing: 0, suppressed: 0, invalid_domain: 0, flagged: 0, domain_unchecked: 0 };
   const domainState = new Map();
   if (checkDomains) {
     const domains = new Set();
@@ -100,16 +100,18 @@ export async function stageImport({ rows, mapping, filename, source, tags = [], 
     }
     const { errors, flags } = validateRecord(rec, required);
     const email = rec.email;
-    if (!errors.length) {
+    // Each rejected row is counted under exactly one reason (the first that applies), so the report adds up.
+    if (errors.length) counts.invalid_or_incomplete++;
+    else {
       const dom = email.split('@')[1];
       const st = domainState.get(dom);
-      if (st === 'none' || st === 'null_mx') { errors.push('invalid domain: no mail server (MX/A) found'); counts.invalid_domain++; }
-      else if (st === 'error' || st === undefined) { flags.push('domain_unchecked'); counts.domain_unchecked++; }
       if (seen.has(email)) { errors.push(`duplicate of row ${seen.get(email)} in this file`); counts.duplicate_in_file++; }
       else {
         seen.set(email, idx + 2);
         if (get('SELECT 1 x FROM leads WHERE email = ?', email)) { errors.push('duplicate: lead already exists'); counts.duplicate_existing++; }
         else if (get('SELECT 1 x FROM suppressions WHERE value IN (?, ?)', email, dom)) { errors.push('suppressed: address or domain is on the suppression list'); counts.suppressed++; }
+        else if (st === 'none' || st === 'null_mx') { errors.push('invalid domain: no mail server (MX/A) found'); counts.invalid_domain++; }
+        else if (st === 'error' || st === undefined) { flags.push('domain_unchecked'); counts.domain_unchecked++; }
       }
     }
     if (errors.length) counts.rejected++; else { counts.importable++; if (flags.length) counts.flagged++; }

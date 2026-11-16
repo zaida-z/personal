@@ -47,11 +47,25 @@ function dohResolver(endpoint) {
 
 /** resolve(name, type) -> array (empty = authoritative "no such record"); throws DnsError when the lookup itself failed. */
 let _resolve;
-export function resolve(name, type) {
-  _resolve ??= config.dnsMode === 'doh' ? dohResolver(DOH.cloudflare) : systemResolver();
-  return _resolve(name, type);
+export async function resolve(name, type) {
+  if (!_resolve) { _resolve = config.dnsMode === 'doh' ? dohResolver(DOH.cloudflare) : systemResolver(); _guard = true; }
+  const out = await _resolve(name, type);
+  // An empty answer only means "no such record" if DNS itself works. Some networks (captive portals,
+  // sandboxes, broken resolvers) answer NXDOMAIN for everything; treating that as authoritative would
+  // mark every domain invalid. So an empty answer is trusted only while a canary lookup succeeds.
+  if (_guard && out.length === 0 && !(await dnsWorking())) throw new DnsError('EDNSUNAVAILABLE', 'DNS is not working on this machine (a lookup of a known-good domain returned nothing)');
+  return out;
 }
-export function setResolver(fn) { _resolve = fn; }
+let _guard = false, _canary = { at: 0, ok: false };
+export async function dnsWorking() {
+  if (Date.now() - _canary.at < 60_000) return _canary.ok;
+  let ok = false;
+  for (const probe of ['gmail.com', 'outlook.com']) { try { if ((await _resolve(probe, 'MX')).length) { ok = true; break; } } catch { /* try next */ } }
+  _canary = { at: Date.now(), ok };
+  return ok;
+}
+/** Tests inject a fixture resolver; fixtures are authoritative, so the canary guard is off. */
+export function setResolver(fn, { guard = false } = {}) { _resolve = fn; _guard = guard; _canary = { at: 0, ok: false }; }
 
 /** Independent vantage points used by the propagation check. */
 export function vantagePoints() {

@@ -43,7 +43,7 @@ export function readiness(id) {
                      WHERE cl.campaign_id = ? AND cl.status IN ('pending','active')`, id);
 
   // 1. recipients
-  add('leads', 'Lead list', leads.length ? 'pass' : 'fail', leads.length ? `${leads.length} lead(s) queued.` : 'No leads have been added to this campaign.');
+  add('leads', 'Lead list', leads.length ? 'pass' : 'fail', leads.length ? `${leads.length} lead(s) queued.` : get('SELECT 1 x FROM campaign_leads WHERE campaign_id = ?', id) ? 'No leads are waiting to be sent: everyone in this campaign has finished or been stopped. Add new leads to continue.' : 'No leads have been added to this campaign.');
 
   // 2. verification threshold
   const failing = leads.map((l) => ({ l, r: meetsThreshold(l, c.verification_threshold) })).filter((x) => !x.r.ok);
