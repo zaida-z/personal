@@ -314,7 +314,18 @@ async function settingsPage(main) {
   const reload = () => route();
   const vals = h('textarea', { style: 'min-height:60px', placeholder: 'emails or domains, one per line' }), comp = h('input', { type: 'email', placeholder: 'recipient@example.com' });
   const line = (ok, label, detail) => h('div', { class: 'check' }, h('div', null, badge(ok ? 'pass' : 'warn', ok ? 'ready' : 'not set')), h('div', null, h('b', null, label), h('div', { class: 'muted' }, detail)));
-  set(main, pageHead('Settings', 'What is configured on this installation, and the suppression list.'),
+  const team = await api('GET', '/team');
+  const nm = h('input', { type: 'email', placeholder: 'teammate@company.com' }), npw = h('input', { type: 'text', autocomplete: 'off', placeholder: 'temporary password (10+ characters)' });
+  const cur = h('input', { type: 'password', autocomplete: 'current-password', placeholder: 'current password' }), nw = h('input', { type: 'password', autocomplete: 'new-password', placeholder: 'new password (10+ characters)' });
+  const teamCard = h('div', { class: 'card' }, h('h2', null, 'Team access'),
+    h('p', { class: 'muted small' }, 'Everyone listed here can sign in and sees all leads, campaigns and inboxes. Share the temporary password privately; they should change it after signing in. Anyone who can reach this app\'s web address can try to sign in, so only expose it over HTTPS.'),
+    h('div', { class: 'table-wrap' }, h('table', null, h('tbody', null, team.members.map((m) => h('tr', null, h('td', null, m.email, m.is_me ? h('span', { class: 'muted small' }, ' (you)') : null), h('td', null, m.is_owner ? badge('active', 'owner') : badge('pending', 'member')), h('td', { class: 'small muted' }, `added ${fmt.date(m.created_at)}`),
+      h('td', { class: 'right' }, team.owner && !m.is_owner ? h('span', { class: 'row' },
+        h('button', { class: 'sm', onclick: act(async () => { const pw = prompt(`New temporary password for ${m.email} (10+ characters):`); if (!pw) return; await api('POST', `/team/${m.id}/password`, { password: pw }); toast('Password reset; they were signed out'); }) }, 'Reset password'),
+        h('button', { class: 'sm danger', onclick: act(async () => { if (!confirm(`Remove ${m.email}? They will be signed out immediately.`)) return; await api('DELETE', `/team/${m.id}`); reload(); }) }, 'Remove')) : null)))))),
+    team.owner ? h('div', { class: 'row', style: 'margin-top:12px' }, nm, npw, h('button', { class: 'primary', onclick: act(async () => { await api('POST', '/team', { email: nm.value, password: npw.value }); toast(`${nm.value} can now sign in`); reload(); }) }, 'Add member')) : h('p', { class: 'small muted', style: 'margin-top:10px' }, 'Only the account owner can add or remove members.'),
+    h('h3', { style: 'margin-top:18px' }, 'Change my password'), h('div', { class: 'row' }, cur, nw, h('button', { onclick: act(async () => { await api('POST', '/me/password', { current_password: cur.value, new_password: nw.value }); cur.value = nw.value = ''; toast('Password changed'); }) }, 'Update')));
+  set(main, pageHead('Settings', 'Team access, what is configured on this installation, and the suppression list.'), teamCard,
     h('div', { class: 'card' }, h('h2', null, 'System configuration'),
       line(s.public_url_reachable, 'Public URL', `${s.public_url}. Click tracking and unsubscribe links point here; recipients must be able to reach it. Real campaigns cannot launch while this is localhost.`),
       line(s.postal_address, 'Postal address in footer', 'SENDER_POSTAL_ADDRESS. Required by CAN-SPAM for commercial email.'),

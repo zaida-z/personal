@@ -86,6 +86,15 @@ simulated everywhere, excluded from real analytics and from domain health metric
 leads use the reserved `.example` domain and are marked "valid" by the script rather than by a real
 check; each one says so in its verification detail.
 
+## 5a. Team access and your own domain
+
+*Settings → Team access*: the owner (first account) adds teammates with a temporary password; they can change it
+under "Change my password". Everyone has full access. Removing someone signs them out immediately.
+
+To reach the app at an address like `app.yourdomain.com`, point a subdomain at wherever it runs, then set
+`PUBLIC_URL=https://app.yourdomain.com`: a Cloudflare Tunnel (runs on your own machine, free, handles HTTPS) or a
+small server with a persistent disk. Always serve it over HTTPS; sign-in is a password only (no 2FA yet).
+
 ## 5. Running it continuously
 
 Sending, inbox sync and domain monitoring run only while `npm start` is running. On a server, run it

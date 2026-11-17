@@ -1,6 +1,7 @@
 import express from 'express';
 import { all, get, run, tx, now, j, audit } from './db.js';
-import { bad, int, str, startJob, getJob } from './http.js';
+import { bad, int, str, startJob, getJob, createUser } from './http.js';
+import { hashPassword, verifyPassword } from './crypto.js';
 import { encrypt, token } from './crypto.js';
 import { config } from './config.js';
 import { verifyEmail, verifyLead, checkSyntax, STATUSES, THRESHOLDS } from './verify/engine.js';
@@ -217,6 +218,44 @@ core.delete('/domains/:id', (req, res) => {
   const d = get('SELECT * FROM domains WHERE id = ?', int(req.params.id));
   if (d && get("SELECT 1 x FROM accounts WHERE email LIKE '%@' || ?", d.name)) throw bad(409, 'A sending account still uses this domain');
   run('DELETE FROM domain_checks WHERE domain_id = ?', int(req.params.id)); run('DELETE FROM domains WHERE id = ?', int(req.params.id)); res.json({ ok: true });
+});
+
+// ---------- team ----------
+// Every member has full access; the first account created (the owner) is the only one who can add, remove or reset members.
+const ownerId = () => get('SELECT MIN(id) id FROM users').id;
+const needOwner = (req) => { if (req.user.id !== ownerId()) throw bad(403, 'Only the account owner can manage team members'); };
+core.get('/team', (req, res) => res.json({ owner: req.user.id === ownerId(), members: all('SELECT id, email, created_at FROM users ORDER BY id').map((u) => ({ ...u, is_owner: u.id === ownerId(), is_me: u.id === req.user.id })) }));
+core.post('/team', (req, res) => {
+  needOwner(req);
+  const email = String(req.body?.email || '').trim().toLowerCase();
+  if (get('SELECT 1 x FROM users WHERE email = ?', email)) throw bad(409, 'That person already has an account');
+  const id = createUser(email, req.body?.password);
+  audit('team.add', { email }, req.user.email);
+  res.status(201).json({ id, email });
+});
+core.post('/team/:id/password', (req, res) => {
+  needOwner(req);
+  const id = int(req.params.id), u = get('SELECT id, email FROM users WHERE id = ?', id);
+  if (!u) throw bad(404, 'Member not found');
+  const pw = String(req.body?.password || '');
+  if (pw.length < 10) throw bad(400, 'Password must be at least 10 characters');
+  tx(() => { run('UPDATE users SET password_hash = ? WHERE id = ?', hashPassword(pw), id); if (id !== req.user.id) run('DELETE FROM sessions WHERE user_id = ?', id); });
+  audit('team.password_reset', { email: u.email }, req.user.email); res.json({ ok: true });
+});
+core.delete('/team/:id', (req, res) => {
+  needOwner(req);
+  const id = int(req.params.id), u = get('SELECT id, email FROM users WHERE id = ?', id);
+  if (!u) throw bad(404, 'Member not found');
+  if (id === ownerId()) throw bad(400, 'The owner account cannot be removed');
+  tx(() => { run('DELETE FROM sessions WHERE user_id = ?', id); run('DELETE FROM users WHERE id = ?', id); });
+  audit('team.remove', { email: u.email }, req.user.email); res.json({ ok: true });
+});
+core.post('/me/password', (req, res) => {
+  const u = get('SELECT * FROM users WHERE id = ?', req.user.id), pw = String(req.body?.new_password || '');
+  if (!verifyPassword(String(req.body?.current_password || ''), u.password_hash)) throw bad(401, 'Current password is incorrect');
+  if (pw.length < 10) throw bad(400, 'New password must be at least 10 characters');
+  run('UPDATE users SET password_hash = ? WHERE id = ?', hashPassword(pw), u.id);
+  audit('user.password_change', {}, u.email); res.json({ ok: true });
 });
 
 // ---------- accounts ----------

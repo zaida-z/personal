@@ -143,3 +143,31 @@ test('accounts: CSV import (Instantly layout) connects valid rows, skips bad one
   assert.equal((await call('GET', '/api/accounts/import/template.csv')).status, 200);
   cookie = ''; assert.equal((await call('POST', '/api/accounts/import?filename=a.csv', body)).status, 401);
 });
+
+test('team: owner can add/reset/remove members; members cannot manage the team; removed members lose access at once', async () => {
+  cookie = ''; await call('POST', '/api/login', { email: 'me@example.com', password: 'correct horse battery' });
+  const ownerCookie = cookie;
+  assert.equal((await call('POST', '/api/team', { email: 'bad', password: 'long enough password' })).status, 400);
+  assert.equal((await call('POST', '/api/team', { email: 'mate@example.com', password: 'short' })).status, 400);
+  assert.equal((await call('POST', '/api/team', { email: 'mate@example.com', password: 'temporary pass 1' })).status, 201);
+  assert.equal((await call('POST', '/api/team', { email: 'MATE@example.com', password: 'temporary pass 1' })).status, 409);
+  assert.doesNotMatch(JSON.stringify((await call('GET', '/api/team')).json), /scrypt|temporary/, 'no hashes or passwords are returned');
+  cookie = ''; assert.equal((await call('POST', '/api/login', { email: 'mate@example.com', password: 'temporary pass 1' })).status, 200);
+  const mateCookie = cookie;
+  assert.equal((await call('GET', '/api/leads')).status, 200);
+  const t = await call('GET', '/api/team'); assert.equal(t.json.owner, false);
+  assert.equal((await call('POST', '/api/team', { email: 'x@example.com', password: 'another long password' })).status, 403);
+  assert.equal((await call('DELETE', `/api/team/${t.json.members[0].id}`)).status, 403);
+  assert.equal((await call('POST', '/api/me/password', { current_password: 'wrong', new_password: 'brand new password 9' })).status, 401);
+  assert.equal((await call('POST', '/api/me/password', { current_password: 'temporary pass 1', new_password: 'brand new password 9' })).status, 200);
+  cookie = ownerCookie;
+  const members = (await call('GET', '/api/team')).json.members, mate = members.find((m) => m.email === 'mate@example.com');
+  assert.equal((await call('DELETE', `/api/team/${members[0].id}`)).status, 400, 'owner cannot be removed');
+  assert.equal((await call('POST', `/api/team/${mate.id}/password`, { password: 'reset by owner 77' })).status, 200);
+  cookie = mateCookie; assert.equal((await call('GET', '/api/leads')).status, 401, 'reset signs the member out');
+  cookie = ''; assert.equal((await call('POST', '/api/login', { email: 'mate@example.com', password: 'reset by owner 77' })).status, 200);
+  const live = cookie; cookie = ownerCookie;
+  assert.equal((await call('DELETE', `/api/team/${mate.id}`)).status, 200);
+  cookie = live; assert.equal((await call('GET', '/api/leads')).status, 401, 'removed member is signed out immediately');
+  cookie = ''; assert.equal((await call('POST', '/api/login', { email: 'mate@example.com', password: 'reset by owner 77' })).status, 401);
+});
